@@ -10,9 +10,11 @@ import numpy as np
 from scipy.io import loadmat
 import collections
 from sklearn.model_selection import GridSearchCV
+from sklearn.decomposition import PCA
 
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from sklearn.preprocessing import LabelEncoder
 from sklearn.pipeline import make_pipeline
@@ -22,7 +24,10 @@ from sklearn.svm import SVC
 from sklearn.metrics import make_scorer
 from sklearn.metrics import fbeta_score
 from sklearn.metrics import confusion_matrix
-
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+from sklearn.metrics import f1_score
+from sklearn.metrics import matthews_corrcoef
 
 # Caminho da pasta com os arquivos .mat
 data_path = r'D:\UTFPR\Maching Learning Curitiba\Códigos Python\assigment 3\sameWindowData'
@@ -158,18 +163,19 @@ print(collections.Counter(y_train))
 
 pipe_svc = make_pipeline(
     StandardScaler(),
-    SVC(class_weight={0: 1, 1: 2},  # 1: classe positiva tem mais peso
-        probability=True,           # se quiser usar ROC depois
+    SVC(class_weight={0: 1, 1: 10},  # 1: classe positiva tem mais peso
+        probability=True,           
         random_state=1)
 )
 
 
-scorer = make_scorer(fbeta_score, beta=2, pos_label=1)
+scorer = make_scorer(fbeta_score, beta=4, pos_label=1)
 
 
 c_range=[0.001,0.002,0.003,0.004,0.005,0.006,0.007,0.008,0.009, 0.01]
-c_range_rbf = [0.1, 0.25, 0.5, 0.75, 1]
-gamma_range= [0.001, 0.0025, 0.005]
+c_range_rbf = [0.1, 0.25, 0.5, 0.9]
+gamma_range= [0.001, 0.0025, 0.003]
+
 
 param_grid = [{'svc__C': c_range,
                'svc__kernel': ['linear']},
@@ -203,19 +209,37 @@ y_pred = clf_svc.predict(X_test)
 confmat = confusion_matrix(y_true=y_test, y_pred=y_pred)
 print(confmat)
 
+# Rótulos legíveis
+labels = ['Não queda', 'Queda']
 
-fig, ax = plt.subplots(figsize=(2.5, 2.5))
-ax.matshow(confmat, cmap=plt.cm.Blues, alpha=0.3)
-for i in range(confmat.shape[0]):
-    for j in range(confmat.shape[1]):
-        ax.text(x=j, y=i, s=confmat[i, j], va='center', ha='center')
-ax.xaxis.set_ticks_position('bottom')
 
-plt.xlabel('Predicted label')
-plt.ylabel('True label')
+# Matriz de confusão
+confmat = confusion_matrix(y_test, y_pred)
 
+# Plot com seaborn
+fig, ax = plt.subplots(figsize=(4, 3.5))
+sns.heatmap(confmat,
+            annot=True,
+            fmt='d',
+            cmap='Blues',
+            xticklabels=labels,
+            yticklabels=labels,
+            cbar=False,
+            ax=ax)
+
+ax.set_xlabel('Classe prevista')
+ax.set_ylabel('Classe verdadeira')
+ax.set_title('Matriz de Confusão no Teste')
 plt.tight_layout()
-#plt.savefig('figures/06_09.png', dpi=300)
-plt.show()
 
+precision = precision_score(y_test, y_pred, pos_label=1)
+recall = recall_score(y_test, y_pred, pos_label=1)
+f1 = f1_score(y_test, y_pred, pos_label=1)
+mcc = matthews_corrcoef(y_test, y_pred)
+
+print("\nMétricas no conjunto de teste:")
+print(f"Precision (queda): {precision:.3f}")
+print(f"Recall (queda):    {recall:.3f}")
+print(f"F1-score:           {f1:.3f}")
+print(f"Matthews CorrCoef:  {mcc:.3f}")
 
