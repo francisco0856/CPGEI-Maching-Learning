@@ -10,9 +10,14 @@ import numpy as np
 from scipy.io import loadmat
 import collections
 from sklearn.model_selection import GridSearchCV
+from sklearn.decomposition import PCA
+
+from sklearn.metrics import roc_curve, auc
+from sklearn.model_selection import StratifiedKFold
 
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from sklearn.preprocessing import LabelEncoder
 from sklearn.pipeline import make_pipeline
@@ -22,7 +27,10 @@ from sklearn.svm import SVC
 from sklearn.metrics import make_scorer
 from sklearn.metrics import fbeta_score
 from sklearn.metrics import confusion_matrix
-
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+from sklearn.metrics import f1_score
+from sklearn.metrics import matthews_corrcoef
 
 # Caminho da pasta com os arquivos .mat
 data_path = r'D:\UTFPR\Maching Learning Curitiba\Códigos Python\assigment 3\sameWindowData'
@@ -158,18 +166,19 @@ print(collections.Counter(y_train))
 
 pipe_svc = make_pipeline(
     StandardScaler(),
-    SVC(class_weight={0: 1, 1: 2},  # 1: classe positiva tem mais peso
-        probability=True,           # se quiser usar ROC depois
+    SVC(class_weight={0: 1, 1: 10},  # 1: classe positiva tem mais peso
+        probability=True,           
         random_state=1)
 )
 
 
-scorer = make_scorer(fbeta_score, beta=2, pos_label=1)
+scorer = make_scorer(fbeta_score, beta=4, pos_label=1)
 
 
 c_range=[0.001,0.002,0.003,0.004,0.005,0.006,0.007,0.008,0.009, 0.01]
-c_range_rbf = [0.1, 0.25, 0.5, 0.75, 1]
-gamma_range= [0.001, 0.0025, 0.005]
+c_range_rbf = [0.1, 0.25, 0.5, 0.9]
+gamma_range= [0.001, 0.0025, 0.003]
+
 
 param_grid = [{'svc__C': c_range,
                'svc__kernel': ['linear']},
@@ -203,19 +212,110 @@ y_pred = clf_svc.predict(X_test)
 confmat = confusion_matrix(y_true=y_test, y_pred=y_pred)
 print(confmat)
 
+# Rótulos legíveis
+labels = ['Não queda', 'Queda']
 
-fig, ax = plt.subplots(figsize=(2.5, 2.5))
-ax.matshow(confmat, cmap=plt.cm.Blues, alpha=0.3)
-for i in range(confmat.shape[0]):
-    for j in range(confmat.shape[1]):
-        ax.text(x=j, y=i, s=confmat[i, j], va='center', ha='center')
-ax.xaxis.set_ticks_position('bottom')
 
-plt.xlabel('Predicted label')
-plt.ylabel('True label')
+# Matriz de confusão
+confmat = confusion_matrix(y_test, y_pred)
 
-plt.tight_layout()
-#plt.savefig('figures/06_09.png', dpi=300)
+# Plot com seaborn
+fig, ax = plt.subplots(figsize=(4, 3.5))
+sns.heatmap(confmat,
+            annot=True,
+            fmt='d',
+            cmap='Blues',
+            xticklabels=labels,
+            yticklabels=labels,
+            cbar=False,
+            ax=ax)
+
+ax.set_xlabel('Classe prevista')
+ax.set_ylabel('Classe verdadeira')
+ax.set_title('Matriz de Confusão no Teste')
+
+# Salva a figura com 300 DPI
+plt.savefig("matriz_confusao_teste.png", dpi=300)
+
 plt.show()
 
 
+precision = precision_score(y_test, y_pred, pos_label=1)
+recall = recall_score(y_test, y_pred, pos_label=1)
+f1 = f1_score(y_test, y_pred, pos_label=1)
+mcc = matthews_corrcoef(y_test, y_pred)
+
+print("\nMétricas no conjunto de teste:")
+print(f"Precision (queda): {precision:.3f}")
+print(f"Recall (queda):    {recall:.3f}")
+print(f"F1-score:           {f1:.3f}")
+print(f"Matthews CorrCoef:  {mcc:.3f}")
+
+
+
+# Curvas ROC de validação cruzada
+plt.figure(figsize=(6, 5))
+cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=1)
+
+for i, (train_idx, val_idx) in enumerate(cv.split(X_train, y_train)):
+    model = clf_svc.fit(X_train[train_idx], y_train[train_idx])
+    y_proba = model.predict_proba(X_train[val_idx])[:, 1]
+    fpr, tpr, _ = roc_curve(y_train[val_idx], y_proba)
+    roc_auc = auc(fpr, tpr)
+    plt.plot(fpr, tpr, lw=1.5, label=f'Fold {i+1} (AUC = {roc_auc:.6f})')
+
+plt.plot([0, 1], [0, 1], color='gray', linestyle=':')
+plt.xlabel('Taxa de Falso Positivo')
+plt.ylabel('Taxa de Verdadeiro Positivo')
+plt.title('Curvas ROC - k - fold')
+plt.legend(loc='lower right')
+plt.tight_layout()
+plt.savefig('roc_cv_svm.png', dpi=300)
+plt.close()
+
+# Curva ROC do conjunto de teste
+plt.figure(figsize=(6, 5))
+y_proba_test = clf_svc.predict_proba(X_test)[:, 1]
+fpr_test, tpr_test, _ = roc_curve(y_test, y_proba_test)
+roc_auc_test = auc(fpr_test, tpr_test)
+
+plt.plot(fpr_test, tpr_test, color='black', linestyle='-', lw=2.5,
+         label=f'Teste Final (AUC = {roc_auc_test:.4f})')
+plt.plot([0, 1], [0, 1], color='gray', linestyle=':')
+plt.xlabel('Taxa de Falso Positivo')
+plt.ylabel('Taxa de Verdadeiro Positivo')
+plt.title('Curva ROC - Conjunto de Teste')
+plt.legend(loc='lower right')
+plt.tight_layout()
+plt.savefig('roc_test_svm.png', dpi=300)
+plt.close()
+
+# Preparar matrizes de confusão para 10 folds
+cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=1)
+
+# Tamanho ajustado para caber em uma página A4 (aprox. 8.27 x 11.69 polegadas)
+fig, axes = plt.subplots(5, 2, figsize=(8.27, 11.69))  # A4 portrait em polegadas
+axes = axes.flatten()
+
+for i, (train_idx, val_idx) in enumerate(cv.split(X_train, y_train)):
+    clf_svc.fit(X_train[train_idx], y_train[train_idx])
+    y_val_pred = clf_svc.predict(X_train[val_idx])
+    confmat = confusion_matrix(y_train[val_idx], y_val_pred)
+
+    sns.heatmap(confmat,
+                annot=True,
+                fmt='d',
+                cmap='Blues',
+                xticklabels=labels,
+                yticklabels=labels,
+                cbar=False,
+                ax=axes[i])
+
+    axes[i].set_title(f'Fold {i+1}', fontsize=8)
+    axes[i].set_xlabel('Classe prevista', fontsize=7)
+    axes[i].set_ylabel('Classe verdadeira', fontsize=7)
+    axes[i].tick_params(axis='both', labelsize=6)
+
+plt.tight_layout(pad=1.0)
+plt.savefig("matrizes_confusao_folds_svm.pdf", format='pdf')
+plt.show()
