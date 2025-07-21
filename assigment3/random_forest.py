@@ -8,21 +8,17 @@ import os
 import pandas as pd
 import numpy as np
 from scipy.io import loadmat
-import collections
-from sklearn.model_selection import GridSearchCV
-from sklearn.decomposition import PCA
 
-from sklearn.metrics import roc_curve, auc
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedKFold
 
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-from sklearn.preprocessing import LabelEncoder
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
+from sklearn.metrics import roc_curve, auc
 
 from sklearn.metrics import make_scorer
 from sklearn.metrics import fbeta_score
@@ -31,6 +27,10 @@ from sklearn.metrics import precision_score
 from sklearn.metrics import recall_score
 from sklearn.metrics import f1_score
 from sklearn.metrics import matthews_corrcoef
+
+from sklearn.ensemble import RandomForestClassifier
+
+
 
 # Caminho da pasta com os arquivos .mat
 data_path = r'D:\UTFPR\Maching Learning Curitiba\Códigos Python\assigment 3\sameWindowData'
@@ -99,8 +99,6 @@ def extrair_features(exemplo):
     # Inicializa dicionário com rótulo (queda ou não) e identificadores
     features = {
         'Fall': 'yes' if exemplo['M'] == 2 else 'no',  # Define rótulo de queda: M=2 indica queda
-        'VO': exemplo['VO'],  # Voluntário
-        'R': exemplo['R'],    # Repetição
     }
 
     # Para cada sensor (aceleração, giroscópio, magnetômetro nos eixos X, Y, Z)
@@ -130,11 +128,11 @@ df_test = pd.DataFrame([extrair_features(ex) for ex in dados_test.values()])
 # 'no'  (não caiu) será codificado como 0
 le = LabelEncoder()
 
-# Converte 'yes' (queda) em 1 e 'no' (não queda) em 0
 y_train = le.fit_transform(df_train['Fall'].values)
 y_test = le.transform(df_test['Fall'].values)
-X_train = df_train.drop(columns=['Fall']).values
+X_train = df_train.drop(columns=['Fall']).values  
 X_test = df_test.drop(columns=['Fall']).values
+feature_names = df_train.drop(columns=['Fall']).columns
 
 # Visualiza as classes aprendidas pelo codificador
 print('\nClasse (Fall):')
@@ -145,135 +143,107 @@ print("\nRótulo codificado (LabelEncoder):")
 print(le.transform(['no', 'yes']))  # Esperado: [0 1]
 
 
-feature_names = df_train.drop(columns=['Fall']).columns
+# ======================================================
+# 1. Pipeline: Random Forest 
+# ======================================================
 
-print("\nDistribuição original das classes no treino:")
-print(collections.Counter(y_train))
-
-
-# Pipeline com normalização + SVM
-
-pipe_svc = make_pipeline(
-    StandardScaler(),
-    SVC(class_weight={0: 1, 1: 10},  # 1: classe positiva tem mais peso
-        probability=True,           
-        random_state=1)
+pipe_rf = make_pipeline(
+    RandomForestClassifier(random_state=1, 
+                           n_jobs=-1,
+                           class_weight={0: 1, 1: 1})
 )
 
+param_grid_rf = {
+    'randomforestclassifier__n_estimators': [25, 50, 75, 100],  # Número de árvores na floresta
+    'randomforestclassifier__max_depth': [2, 3, 4], # Profundidade máxima das árvores
+    'randomforestclassifier__min_samples_leaf': [2, 4, 6],
+    'randomforestclassifier__ccp_alpha': [0.001, 0.002] #parametro de poda
+}
 
+# ======================================================
+# 3. Métrica personalizada: F2-score (importância maior para recall)
+# ======================================================
 scorer = make_scorer(fbeta_score, beta=2, pos_label=1)
 
 
-c_range=[0.001,0.002,0.003,0.004,0.005,0.006,0.007,0.008,0.009, 0.01]
-c_range_rbf = [0.1, 0.25, 0.5, 0.9]
-gamma_range= [0.001, 0.0025, 0.003]
+# ======================================================
+# 4. splits fixos
+# ======================================================
+
+cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
 
 
-param_grid = [{'svc__C': c_range,
-               'svc__kernel': ['linear']},
-              {'svc__C': c_range_rbf,
-               'svc__gamma': gamma_range,
-               'svc__kernel': ['rbf']}]
+# ======================================================
+# 5. Busca em grade com validação cruzada
+# ======================================================
+gs_rf = GridSearchCV(
+    estimator=pipe_rf,
+    param_grid=param_grid_rf,
+    scoring=scorer,
+    refit=True,
+    return_train_score=True,
+    cv=cv, 
+    verbose=1
+)
 
-cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=1)
 
-gs = GridSearchCV(estimator=pipe_svc,
-                  param_grid=param_grid,
-                  scoring=scorer,
-                  cv=cv,
-                  verbose=1,
-                  n_jobs=-1)
+gs_rf.fit(X_train, y_train)
 
-gs = gs.fit(X_train, y_train)
+clf_rf = gs_rf.best_estimator_
 
-print(gs.best_score_)
-print(gs.best_params_)
-
-clf_svc = gs.best_estimator_
-
-# Exibe a melhor combinação de hiperparâmetros encontrada
-print("\nMelhores hyperparâmetros (RF):", gs.best_params_)
+print("\nMelhor F2 score médio :", gs_rf.best_score_)
 
 # Avalia o desempenho do modelo final no conjunto de teste final (VO 19 a 22)
-acc_test = clf_svc.score(X_test, y_test)
-y_pred = clf_svc.predict(X_test)
-f2_test = fbeta_score(y_test, y_pred, beta=2, pos_label=1)
 
-print(f">>> Acurácia no conjunto de teste final (VO 19 a 22): {acc_test:.3f}")
+acc_test = clf_rf.score(X_test, y_test)
+y_pred = clf_rf.predict(X_test)
+f2_test = fbeta_score(y_test, y_pred, beta=2, pos_label=1)
+print("\nMelhores hyperparâmetros (RF):", gs_rf.best_params_)
+
+print(f"\n>>> Acurácia no conjunto de teste final (VO 19 a 22): {acc_test:.3f}")
 print(f">>> F2-score no conjunto de teste final:              {f2_test:.3f}")
 
 
-y_pred = clf_svc.predict(X_test)
-
+y_pred = clf_rf.predict(X_test)
 confmat = confusion_matrix(y_true=y_test, y_pred=y_pred)
-print(confmat)
 
-# Rótulos legíveis
-labels = ['Não queda', 'Queda']
-
+# ============================================================
+# Métricas no teste
+# ============================================================
 
 # Matriz de confusão
-confmat = confusion_matrix(y_test, y_pred)
 
-# Plot com seaborn
+labels = ['Não queda', 'Queda']
+
 fig, ax = plt.subplots(figsize=(4, 4))
-sns.heatmap(confmat,
-            annot=True,
-            fmt='d',
-            cmap='Blues',
-            xticklabels=labels,
-            yticklabels=labels,
-            cbar=False,
-            ax=ax)
-
+sns.heatmap(confmat, annot=True, fmt='d', cmap='Blues',
+            xticklabels=labels, yticklabels=labels, cbar=False, ax=ax)
 ax.set_xlabel('Classe prevista')
 ax.set_ylabel('Classe verdadeira')
 ax.set_title('Matriz de Confusão no Teste')
-
-# Salva a figura com 300 DPI
-plt.savefig("matriz_confusao_teste.png", dpi=300)
-
+plt.savefig("matriz_confusao_teste_random_forest.png", dpi=300)
 plt.show()
-
 
 precision = precision_score(y_test, y_pred, pos_label=1)
 recall = recall_score(y_test, y_pred, pos_label=1)
 f1 = f1_score(y_test, y_pred, pos_label=1)
 mcc = matthews_corrcoef(y_test, y_pred)
-f2 = fbeta_score(y_test, y_pred, beta=2, pos_label=1)
+f2 = fbeta_score(y_test, y_pred, beta=4, pos_label=1)
 
 print("\nMétricas no conjunto de teste:")
-print(f"Precision (queda): {precision:.3f}")
-print(f"Recall (queda):    {recall:.3f}")
+print(f"Precision {precision:.3f}")
+print(f"Recall:    {recall:.3f}")
 print(f"F1-score:           {f1:.3f}")
 print(f"Matthews CorrCoef:  {mcc:.3f}")
 print(f"F2-score:            {f2:.3f}")
 
+# ============================================================
+# Curvas ROC
+# ============================================================
 
-
-# Curvas ROC de validação cruzada
 plt.figure(figsize=(6, 5))
-
-for i, (train_idx, val_idx) in enumerate(cv.split(X_train, y_train)):
-    model = clf_svc.fit(X_train[train_idx], y_train[train_idx])
-    y_proba = model.predict_proba(X_train[val_idx])[:, 1]
-    fpr, tpr, _ = roc_curve(y_train[val_idx], y_proba)
-    roc_auc = auc(fpr, tpr)
-    plt.plot(fpr, tpr, lw=1.5, label=f'Fold {i+1} (AUC = {roc_auc:.6f})')
-
-plt.plot([0, 1], [0, 1], color='gray', linestyle=':')
-plt.xlabel('Taxa de Falso Positivo')
-plt.ylabel('Taxa de Verdadeiro Positivo')
-plt.title('Curvas ROC - k - fold')
-plt.legend(loc='lower right')
-plt.tight_layout()
-plt.savefig('roc_cv_svm.png', dpi=300)
-plt.close()
-
-# Curva ROC do conjunto de teste
-plt.figure(figsize=(6, 5))
-y_proba_test = clf_svc.predict_proba(X_test)[:, 1]
-fpr_test, tpr_test, _ = roc_curve(y_test, y_proba_test)
+y_score_test = clf_rf.predict_proba(X_test)[:, 1]
+fpr_test, tpr_test, _ = roc_curve(y_test, y_score_test)
 roc_auc_test = auc(fpr_test, tpr_test)
 
 plt.plot(fpr_test, tpr_test, color='black', linestyle='-', lw=2.5,
@@ -284,35 +254,33 @@ plt.ylabel('Taxa de Verdadeiro Positivo')
 plt.title('Curva ROC - Conjunto de Teste')
 plt.legend(loc='lower right')
 plt.tight_layout()
-plt.savefig('roc_test_svm.png', dpi=300)
+plt.savefig('roc_test_random_forest.png', dpi=300)
 plt.close()
 
-# Preparar matrizes de confusão para 10 folds
-cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=1)
+# ===============================
+# Importância das features
+# ===============================
+rf_model = clf_rf.named_steps['randomforestclassifier']
+importances = rf_model.feature_importances_
+indices = np.argsort(importances)[::-1]
 
-# Tamanho ajustado para caber em uma página A4 (aprox. 8.27 x 11.69 polegadas)
-fig, axes = plt.subplots(5, 2, figsize=(8.27, 11.69))  # A4 portrait em polegadas
-axes = axes.flatten()
+# Ranking textual
+print("\nImportância das features (ordem decrescente):")
+for f in range(X_train.shape[1]):
+    print("%2d) %-30s %f" % (
+        f + 1,
+        feature_names[indices[f]],
+        importances[indices[f]]
+    ))
 
-for i, (train_idx, val_idx) in enumerate(cv.split(X_train, y_train)):
-    clf_svc.fit(X_train[train_idx], y_train[train_idx])
-    y_val_pred = clf_svc.predict(X_train[val_idx])
-    confmat = confusion_matrix(y_train[val_idx], y_val_pred)
+# Gráfico
+plt.figure(figsize=(12, 6))
+plt.title('Importância das features (Random Forest)')
+plt.bar(range(len(importances)), importances[indices], align='center')
+plt.xticks(range(len(importances)), feature_names[indices], rotation=90)
+plt.tight_layout()
 
-    sns.heatmap(confmat,
-                annot=True,
-                fmt='d',
-                cmap='Blues',
-                xticklabels=labels,
-                yticklabels=labels,
-                cbar=False,
-                ax=axes[i])
-
-    axes[i].set_title(f'Fold {i+1}', fontsize=8)
-    axes[i].set_xlabel('Classe prevista', fontsize=7)
-    axes[i].set_ylabel('Classe verdadeira', fontsize=7)
-    axes[i].tick_params(axis='both', labelsize=6)
-
-plt.tight_layout(pad=1.0)
-plt.savefig("matrizes_confusao_folds_svm.pdf", format='pdf')
+# Salvar imagem com 300 dpi
+plt.savefig('importancia_features_RF_pipeline.png', dpi=300, bbox_inches='tight')
 plt.show()
+

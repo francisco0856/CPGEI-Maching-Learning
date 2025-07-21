@@ -1,0 +1,308 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Jul 17 20:02:22 2025
+@author: Francisco
+"""
+
+import os
+import pandas as pd
+import numpy as np
+from scipy.io import loadmat
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import SGDClassifier
+from sklearn.model_selection import StratifiedKFold
+
+
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import roc_curve, auc
+from matplotlib.colors import ListedColormap  # usada para criar mapas de cores personalizados
+
+from sklearn.metrics import make_scorer
+from sklearn.metrics import fbeta_score
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+from sklearn.metrics import f1_score
+from sklearn.metrics import matthews_corrcoef
+
+
+def plot_decision_regions(X, y, classifier, resolution=0.02):
+    # Define marcadores e cores
+    markers = ('o', 's', '^', 'v', '<')  # tipos de marcador para cada classe
+    colors = ('red', 'blue', 'lightgreen', 'gray', 'cyan')
+    cmap = ListedColormap(colors[:len(np.unique(y))])  # cria mapa de cores com uma cor por classe
+
+    # Define limites do grid para a superfície de decisão
+    x1_min, x1_max = X[:, 0].min() - 1, X[:, 0].max() + 1
+    x2_min, x2_max = X[:, 1].min() - 1, X[:, 1].max() + 1
+
+    # Gera uma malha de pontos para plotar a superfície
+    xx1, xx2 = np.meshgrid(np.arange(x1_min, x1_max, resolution),
+                           np.arange(x2_min, x2_max, resolution))
+    
+    # Classifica cada ponto da malha
+    lab = classifier.predict(np.array([xx1.ravel(), xx2.ravel()]).T)
+    lab = lab.reshape(xx1.shape)
+
+    # Plota as regiões de decisão
+    plt.contourf(xx1, xx2, lab, alpha=0.3, cmap=cmap)
+    plt.xlim(xx1.min(), xx1.max())
+    plt.ylim(xx2.min(), xx2.max())
+
+    # Plota os pontos de dados reais
+    for idx, cl in enumerate(np.unique(y)):
+        plt.scatter(x=X[y == cl, 0],
+                    y=X[y == cl, 1],
+                    alpha=0.8,
+                    c=colors[idx],
+                    marker=markers[idx],
+                    label=f'Class {cl}',
+                    edgecolor='black')
+        
+# Função para extrair estatísticas de um exemplo (ignorando a coluna de tempo)
+def extrair_features(exemplo):
+    df = exemplo['df']
+
+    # Inicializa dicionário com rótulo (queda ou não) e identificadores
+    features = {
+        'Fall': 'yes' if exemplo['M'] == 2 else 'no',  # Define rótulo de queda: M=2 indica queda
+    }
+
+    # Para cada sensor (aceleração, giroscópio, magnetômetro nos eixos X, Y, Z)
+    for col in colunas[1:]:  # Ignora a coluna 'tempo'
+        x = df[col].astype(np.float64)  # Garante precisão numérica
+        # Extrai estatísticas básicas da série temporal
+        features[f'{col}_mean'] = x.mean()                 # Média
+        features[f'{col}_std'] = x.std()                   # Desvio padrão
+        features[f'{col}_var'] = x.var()                   # Variância
+        features[f'{col}_min'] = x.min()                   # Mínimo
+        features[f'{col}_max'] = x.max()                   # Máximo
+        features[f'{col}_range'] = x.max() - x.min()       # Amplitude
+        features[f'{col}_rms'] = np.sqrt(np.mean(x**2))    # RMS (root mean square)
+
+    return features
+
+#Caminho da pasta com os arquivos .mat
+data_path = r'D:\UTFPR\Maching Learning Curitiba\Códigos Python\assigment 3\sameWindowData'
+
+# Lista e ordena os arquivos .mat
+mat_files = sorted([f for f in os.listdir(data_path) if f.endswith('.mat')])
+
+# Nomes das colunas
+colunas = ['tempo',
+           'acc_X', 'acc_Y', 'acc_Z', # Aceleração nos eixos X, Y e Z
+           'gyro_X', 'gyro_Y', 'gyro_Z', # Giroscópio nos eixos X, Y e Z
+           'mag_X', 'mag_Y', 'mag_Z'] # Magnetômetro nos eixos X, Y e Z
+
+# Frequência de amostragem (Hz) e período de amostragem (s)
+Fs = 100
+Ts = 1 / Fs
+
+# Inicializa um dicionário para armazenar os dados de todos os arquivos
+dados = {}
+
+
+# Itera sobre cada arquivo .mat encontrado
+for file in mat_files:
+    # Monta o caminho completo do arquivo
+    filepath = os.path.join(data_path, file) 
+    # Carrega o conteúdo do arquivo .mat
+    conteudo = loadmat(filepath) 
+    # Extrai a matriz chamada 'newData'
+    newData = conteudo['newData'] 
+    # Constrói um DataFrame pandas com os dados e os nomes de coluna definidos
+    df = pd.DataFrame(newData[:, :10], columns=colunas)
+    # Converte a coluna de tempo de amostras para segundos
+    df['tempo'] = df['tempo'] * Ts
+    # Extrai o nome do arquivo sem a extensão e divide pelas partes usando ponto
+    nome_base = os.path.splitext(file)[0]
+    partes = nome_base.split('.')
+    
+    # Extrai identificadores numéricos M, R e VO a partir do nome do arquivo
+    M = int(partes[0])  # Queda
+    R = int(partes[2])  # Repetição
+    VO = int(partes[3]) # Voluntário
+
+    dados[nome_base] = {
+        'M': M,
+        'R': R,
+        'VO': VO,
+        'df': df # DataFrame com os dados sensoriais
+    }
+
+# Divide os dados em conjunto de treino e teste com base no identificador do voluntário (VO)
+# Voluntários com VO de 1 a 18 são usados para treino
+dados_train = {k: v for k, v in dados.items() if v['VO'] <= 18}
+
+# Voluntários com VO 19 ou maior são usados para teste
+dados_test = {k: v for k, v in dados.items() if v['VO'] >= 19}
+
+print(f"Total de exemplos de treino: {len(dados_train)}")
+print(f"Total de exemplos de teste: {len(dados_test)}")
+
+# Cria o DataFrame de treino aplicando a função de extração de features em cada exemplo
+# Cada linha do DataFrame representa um exemplo com as features extraídas
+df_train = pd.DataFrame([extrair_features(ex) for ex in dados_train.values()])
+df_test = pd.DataFrame([extrair_features(ex) for ex in dados_test.values()])
+
+# Codificação dos rótulos de classe para uso em algoritmos de classificação
+# 'yes' (caiu) será codificado como 1
+# 'no'  (não caiu) será codificado como 0
+le = LabelEncoder()
+
+# Converte 'yes' (queda) em 1 e 'no' (não queda) em 0
+y_train = le.fit_transform(df_train['Fall'].values)
+y_test = le.transform(df_test['Fall'].values)
+
+X_train = df_train.drop(columns=['Fall']).values  
+X_test = df_test.drop(columns=['Fall']).values
+
+# Salva os nomes das features para futura visualização ou interpretação dos modelos
+feature_names = df_train.drop(columns=['Fall']).columns
+
+# Visualiza as classes aprendidas pelo codificador
+print('\nClasse (Fall):')
+print(le.classes_)
+
+# Mostra o resultado da transformação das classes para números
+print("Rótulo codificado (LabelEncoder):")
+print(le.transform(['no', 'yes']))  # Esperado: [0 1]
+
+# ======================================================
+# 1. Pipeline: Adaline com descida do gradiente
+# ======================================================
+pipe_adaline = make_pipeline(
+    StandardScaler(),
+    SGDClassifier(
+        loss='squared_error',         # Erro quadrático → Adaline clássico
+        learning_rate='constant',     # Taxa de aprendizado fixa
+        max_iter=100,                # Número de épocas
+        eta0=0.0001,             # Taxa de aprendizado fixa  eta0=eta     
+        tol=1e-3,    
+        random_state=1,
+        class_weight={0: 1, 1: 10}    # Penaliza mais as quedas (classe 1)
+    )
+)
+
+# ======================================================
+# 2. Grid de hiperparâmetros
+# ======================================================
+param_grid = [
+    {
+        'sgdclassifier__penalty': ['l1'],
+        'sgdclassifier__alpha': [0.0005, 0.001, 0.0025, 0.005, 0.0075, 0.01]
+    },
+    {
+        'sgdclassifier__penalty': ['l2'],
+        'sgdclassifier__alpha': [0.1, 0.2, 0.4, 0.6, 0.8, 1]
+    }
+]
+
+# ======================================================
+# 3. Métrica personalizada: F2-score (importância maior para recall)
+# ======================================================
+scorer = make_scorer(fbeta_score, beta=2, pos_label=1)
+
+# ======================================================
+# 4. splits fixos
+# ======================================================
+
+cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=1)
+
+
+# ======================================================
+# 5. Busca em grade com validação cruzada
+# ======================================================
+gs_ada = GridSearchCV(
+    estimator=pipe_adaline,
+    param_grid=param_grid,
+    scoring=scorer,
+    refit=True,
+    return_train_score=True,
+    cv=cv, 
+    verbose=1
+)
+
+
+
+gs_ada.fit(X_train, y_train)
+
+
+clf_adaline = gs_ada.best_estimator_
+
+print("\nMelhor F2 score médio :", gs_ada.best_score_)
+
+# Avalia o desempenho do modelo final no conjunto de teste final (VO 19 a 22)
+
+acc_test = clf_adaline.score(X_test, y_test)
+y_pred = clf_adaline.predict(X_test)
+f2_test = fbeta_score(y_test, y_pred, beta=2, pos_label=1)
+print("\nMelhores hyperparâmetros (RF):\n", gs_ada.best_params_)
+
+print(f"\n>>> Acurácia no conjunto de teste final (VO 19 a 22): {acc_test:.3f}")
+print(f">>> F2-score no conjunto de teste final:              {f2_test:.3f}")
+
+
+y_pred = clf_adaline.predict(X_test)
+confmat = confusion_matrix(y_true=y_test, y_pred=y_pred)
+
+
+
+# ============================================================
+# Métricas no teste
+# ============================================================
+
+# Matriz de confusão
+
+labels = ['Não queda', 'Queda']
+
+fig, ax = plt.subplots(figsize=(4, 4))
+sns.heatmap(confmat, annot=True, fmt='d', cmap='Blues',
+            xticklabels=labels, yticklabels=labels, cbar=False, ax=ax)
+ax.set_xlabel('Classe prevista')
+ax.set_ylabel('Classe verdadeira')
+ax.set_title('Matriz de Confusão no Teste')
+plt.savefig("matriz_confusao_teste_adaline.png", dpi=300)
+plt.show()
+
+
+
+precision = precision_score(y_test, y_pred, pos_label=1)
+recall = recall_score(y_test, y_pred, pos_label=1)
+f1 = f1_score(y_test, y_pred, pos_label=1)
+mcc = matthews_corrcoef(y_test, y_pred)
+f2 = fbeta_score(y_test, y_pred, beta=4, pos_label=1)
+
+print("\nMétricas no conjunto de teste:")
+print(f"Precision (queda): {precision:.3f}")
+print(f"Recall (queda):    {recall:.3f}")
+print(f"F1-score:           {f1:.3f}")
+print(f"Matthews CorrCoef:  {mcc:.3f}")
+print(f"F2-score:            {f2:.3f}")
+
+# ============================================================
+# Curvas ROC
+# ============================================================
+plt.figure(figsize=(6, 5))
+y_score_test = clf_adaline.decision_function(X_test)
+fpr_test, tpr_test, _ = roc_curve(y_test, y_score_test)
+roc_auc_test = auc(fpr_test, tpr_test)
+
+plt.plot(fpr_test, tpr_test, color='black', linestyle='-', lw=2.5,
+         label=f'Teste Final (AUC = {roc_auc_test:.4f})')
+plt.plot([0, 1], [0, 1], color='gray', linestyle=':')
+plt.xlabel('Taxa de Falso Positivo')
+plt.ylabel('Taxa de Verdadeiro Positivo')
+plt.title('Curva ROC - Conjunto de Teste')
+plt.legend(loc='lower right')
+plt.tight_layout()
+plt.savefig('roc_test_adaline.png', dpi=300)
+plt.close()
+
+

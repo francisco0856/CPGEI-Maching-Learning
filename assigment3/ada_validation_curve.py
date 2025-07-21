@@ -8,22 +8,21 @@ import os
 import pandas as pd
 import numpy as np
 from scipy.io import loadmat
-import collections
 
-
-from sklearn.model_selection import StratifiedKFold
+import matplotlib.pyplot as plt
 
 from sklearn.preprocessing import LabelEncoder
-import matplotlib.pyplot as plt
-from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
-from sklearn.utils import shuffle
+from sklearn.linear_model import SGDClassifier
+from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import validation_curve
 
 
+from sklearn.pipeline import make_pipeline
+
 from sklearn.metrics import make_scorer
 from sklearn.metrics import fbeta_score
+
 
 # Caminho da pasta com os arquivos .mat
 data_path = r'D:\UTFPR\Maching Learning Curitiba\Códigos Python\assigment 3\sameWindowData'
@@ -124,9 +123,11 @@ le = LabelEncoder()
 # Converte 'yes' (queda) em 1 e 'no' (não queda) em 0
 y_train = le.fit_transform(df_train['Fall'].values)
 y_test = le.transform(df_test['Fall'].values)
+
 X_train = df_train.drop(columns=['Fall']).values  
 X_test = df_test.drop(columns=['Fall']).values
 feature_names = df_train.drop(columns=['Fall']).columns
+
 
 # Visualiza as classes aprendidas pelo codificador
 print('\nClasse (Fall):')
@@ -137,145 +138,145 @@ print("\nRótulo codificado (LabelEncoder):")
 print(le.transform(['no', 'yes']))  # Esperado: [0 1]
 
 
+# ======================================================
+# 1. Pipeline: Adaline com descida do gradiente
+# ======================================================
 
-
-print("\nDistribuição original das classes no treino:")
-print(collections.Counter(y_train))
-
-
-# Pipeline com normalização + SVM
-
-pipe_svc_rbf_gamma = make_pipeline(
+pipe_adaline_l1 = make_pipeline(
     StandardScaler(),
-    SVC(kernel='rbf',  
-        C=0.1,# valor fixo de C            
-        class_weight={0: 1, 1: 10},
-        probability=True,
-        random_state=1)
+    SGDClassifier(
+        loss='squared_error',         # Erro quadrático → Adaline clássico
+        learning_rate='constant',     # Taxa de aprendizado fixa
+        eta0=0.0001,                  
+        max_iter=100,                 # Número de épocas
+        tol=1e-3,                     
+        random_state=1,
+        penalty='l1',               # <- Regularização L1
+        class_weight={0: 1, 1: 10}    # Penaliza mais as quedas (classe 1)
+    )
 )
 
-pipe_svc_rbf_c = make_pipeline(
+pipe_adaline_l2 = make_pipeline(
     StandardScaler(),
-    SVC(kernel='rbf',  
-        gamma=0.005,# valor fixo de gamma           
-        class_weight={0: 1, 1: 10},
-        probability=True,
-        random_state=1)
-)
-
-pipe_svc_leinar = make_pipeline(
-    StandardScaler(),
-    SVC(kernel='linear',               
-        class_weight={0: 1, 1: 10},
-        probability=True,
-        random_state=1)
+    SGDClassifier(
+        loss='squared_error',         # Erro quadrático → Adaline clássico
+        learning_rate='constant',     # Taxa de aprendizado fixa
+        eta0=0.0001,                  
+        max_iter=100,                 # Número de épocas
+        tol=1e-3,                     
+        random_state=1,
+        penalty='l2',               # <- Regularização L2
+        class_weight={0: 1, 1: 10}    # Penaliza mais as quedas (classe 1)
+    )
 )
 
 
-#X_train, y_train = shuffle(X_train, y_train, random_state=1)
-
-tkfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=17)
-
-# F2-score como métrica
+# ======================================================
+# 3. Métrica personalizada: F2-score (importância maior para recall)
+# ======================================================
 scorer = make_scorer(fbeta_score, beta=2, pos_label=1)
 
-# Faixas de hiperparâmetros
-gamma_range = np.logspace(-4, 0, num=100)  # 10 valores logaritmicamente espaçados
-c_range = [0.001, 0.01, 0.1, 1, 10, 100]
+# ======================================================
+# 4. Objeto de validação cruzada com splits fixos
+# ======================================================
 
+# Define a validação cruzada com 5 folds
 
-# Curva 1 – Variando gamma (com C fixo)
-train_scores_rbf_gamma, test_scores_rbf_gamma = validation_curve(
-    estimator=pipe_svc_rbf_gamma,
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=1)
+
+alpha_range = np.logspace(-2, 0, 20)  # De 10^-3 até 10^0 (1.0), 100 valores
+alpha_rangeL2 = np.logspace(-2, 2, 20)  # De 10^-3 até 10^0 (1.0), 100 valores
+
+# Executa validation_curve corretamente
+train_scores_ada, test_scores_ada = validation_curve(
+    estimator=pipe_adaline_l1,
     X=X_train,
     y=y_train,
-    param_name='svc__gamma',
-    param_range=gamma_range,
-    cv=tkfold,
-    scoring=scorer,
+    param_name='sgdclassifier__alpha',
+    param_range=alpha_range,
+    cv=cv,
+    scoring=scorer,  # make_scorer(fbeta_score, beta=2 ou 4)
     n_jobs=-1
 )
 
-# Curva 2 – Variando C (com gamma fixo)
-train_scores_rbf_c, test_scores_rbf_c = validation_curve(
-    estimator=pipe_svc_rbf_c,
-    X=X_train,
-    y=y_train,
-    param_name='svc__C',
-    param_range=c_range,
-    cv=tkfold,
-    scoring=scorer,
-    n_jobs=-1
-)
+train_mean = np.mean(train_scores_ada, axis=1)
+train_std = np.std(train_scores_ada, axis=1)
+test_mean = np.mean(test_scores_ada, axis=1)
+test_std = np.std(test_scores_ada, axis=1)
 
-# Curva 3 – SVC Linear variando C
-train_scores_linear, test_scores_linear = validation_curve(
-    estimator=pipe_svc_leinar,
-    X=X_train,
-    y=y_train,
-    param_name='svc__C',
-    param_range=c_range,
-    cv=tkfold,
-    scoring=scorer,
-    n_jobs=-1
-)
+plt.plot(alpha_range, train_mean,
+         color='blue', marker='o',
+         markersize=5, label='Treino')
 
-train_mean = np.mean(train_scores_rbf_gamma, axis=1)
-train_std = np.std(train_scores_rbf_gamma, axis=1)
-test_mean = np.mean(test_scores_rbf_gamma, axis=1)
-test_std = np.std(test_scores_rbf_gamma, axis=1)
+plt.fill_between(alpha_range, train_mean + train_std,
+                 train_mean - train_std, alpha=0.15,
+                 color='blue')
 
-plt.figure(figsize=(6, 4))
-plt.plot(gamma_range, train_mean, color='blue', marker='o', label='Treino')
-plt.fill_between(gamma_range, train_mean - train_std, train_mean + train_std, alpha=0.15, color='blue')
-plt.plot(gamma_range, test_mean, color='green', linestyle='--', marker='s',markersize=3,  label='Validação')
-plt.fill_between(gamma_range, test_mean - test_std, test_mean + test_std, alpha=0.15, color='green')
-plt.xscale('log')
-plt.xlabel('gamma (RBF)')
-plt.ylabel('F2-score')
-plt.title('SVC RBF - F2 x gamma (C fixo em 0.1)')
+plt.plot(alpha_range, test_mean,
+         color='green', linestyle='--',
+         marker='s', markersize=5,
+         label='Validação')
+
+plt.fill_between(alpha_range,
+                 test_mean + test_std,
+                 test_mean - test_std,
+                 alpha=0.15, color='green')
+
 plt.grid()
-plt.legend()
+plt.xscale('log')
+plt.legend(loc='lower right')
+plt.xlabel('Parâmetro de reguralização alpha para  (L1)')
+plt.ylabel('F2-score')
+plt.ylim([0.8, 1.0])
+plt.title('Curva de Validação (eta fixo = 0.0001)', fontsize=12)
 plt.tight_layout()
-plt.savefig('svc_rbf_f2_vs_gamma.png', dpi=300)
+plt.savefig("validation_curve_adaline_l1.png", format='png', dpi=300)
+plt.savefig("validation_curve_adaline_l1.pdf", format='pdf')  # <- esta linha salva o gráfico
 plt.show()
 
-train_mean = np.mean(train_scores_rbf_c, axis=1)
-train_std = np.std(train_scores_rbf_c, axis=1)
-test_mean = np.mean(test_scores_rbf_c, axis=1)
-test_std = np.std(test_scores_rbf_c, axis=1)
+# Executa validation_curve corretamente
+train_scores_ada, test_scores_ada = validation_curve(
+    estimator=pipe_adaline_l2,
+    X=X_train,
+    y=y_train,
+    param_name='sgdclassifier__alpha',
+    param_range=alpha_rangeL2,
+    cv=cv,
+    scoring=scorer,  # make_scorer(fbeta_score, beta=2 ou 4)
+    n_jobs=-1
+)
 
-plt.figure(figsize=(6, 4))
-plt.plot(c_range, train_mean, color='blue', marker='o', label='Treino')
-plt.fill_between(c_range, train_mean - train_std, train_mean + train_std, alpha=0.15, color='blue')
-plt.plot(c_range, test_mean, color='green', linestyle='--', marker='s', label='Validação')
-plt.fill_between(c_range, test_mean - test_std, test_mean + test_std, alpha=0.15, color='green')
-plt.xscale('log')
-plt.xlabel('C (RBF)')
-plt.ylabel('F2-score')
-plt.title('SVC RBF - F2 x C (gamma fixo em 0.005)')
+train_mean = np.mean(train_scores_ada, axis=1)
+train_std = np.std(train_scores_ada, axis=1)
+test_mean = np.mean(test_scores_ada, axis=1)
+test_std = np.std(test_scores_ada, axis=1)
+
+plt.plot(alpha_rangeL2, train_mean,
+         color='blue', marker='o',
+         markersize=5, label='Treino')
+
+plt.fill_between(alpha_rangeL2, train_mean + train_std,
+                 train_mean - train_std, alpha=0.15,
+                 color='blue')
+
+plt.plot(alpha_rangeL2, test_mean,
+         color='green', linestyle='--',
+         marker='s', markersize=5,
+         label='Validação')
+
+plt.fill_between(alpha_rangeL2,
+                 test_mean + test_std,
+                 test_mean - test_std,
+                 alpha=0.15, color='green')
+
 plt.grid()
-plt.legend()
-plt.tight_layout()
-plt.savefig('svc_rbf_f2_vs_C.png', dpi=300)
-plt.show()
-
-train_mean = np.mean(train_scores_linear, axis=1)
-train_std = np.std(train_scores_linear, axis=1)
-test_mean = np.mean(test_scores_linear, axis=1)
-test_std = np.std(test_scores_linear, axis=1)
-
-plt.figure(figsize=(6, 4))
-plt.plot(c_range, train_mean, color='blue', marker='o', label='Treino')
-plt.fill_between(c_range, train_mean - train_std, train_mean + train_std, alpha=0.15, color='blue')
-plt.plot(c_range, test_mean, color='green', linestyle='--', marker='s', label='Validação')
-plt.fill_between(c_range, test_mean - test_std, test_mean + test_std, alpha=0.15, color='green')
 plt.xscale('log')
-plt.xlabel('C (Linear)')
+plt.legend(loc='lower right')
+plt.xlabel('Parâmetro de reguralização alpha para  (L2)')
 plt.ylabel('F2-score')
-plt.title('SVC Linear - F2 x C')
-plt.grid()
-plt.legend()
+plt.ylim([0.8, 1.0])
+plt.title('Curva de Validação (eta fixo = 0.0001)', fontsize=12)
 plt.tight_layout()
-plt.savefig('svc_linear_f2_vs_C.png', dpi=300)
+plt.savefig("validation_curve_adaline_l2.png", format='png', dpi=300)
+plt.savefig("validation_curve_adaline_l2.pdf", format='pdf')  # <- esta linha salva o gráfico
 plt.show()

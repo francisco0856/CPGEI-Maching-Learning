@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 from scipy.io import loadmat
 from scipy.interpolate import interp1d
+from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 from sklearn.preprocessing import LabelEncoder
 import matplotlib.pyplot as plt
@@ -14,8 +17,6 @@ def extrair_features(exemplo):
     # Inicializa dicionário com rótulo (queda ou não) e identificadores
     features = {
         'Fall': 'yes' if exemplo['M'] == 2 else 'no',  # Define rótulo de queda: M=2 indica queda
-        'VO': exemplo['VO'],  # Voluntário
-        'R': exemplo['R'],    # Repetição
     }
 
     # Para cada sensor (aceleração, giroscópio, magnetômetro nos eixos X, Y, Z)
@@ -114,11 +115,13 @@ le = LabelEncoder()
 # - 'VO': identificador do voluntário (não é uma feature do movimento)
 # - 'R' : número da repetição (também não é uma feature do movimento)
 
-X_train = df_train.drop(columns=['Fall', 'VO', 'R']).values
+X_train = df_train.drop(columns=['Fall']).values
 y_train = le.fit_transform(df_train['Fall'].values)
 
-X_test = df_test.drop(columns=['Fall', 'VO', 'R']).values
+X_test = df_test.drop(columns=['Fall']).values
 y_test = le.transform(df_test['Fall'].values)
+
+feature_names = df_train.drop(columns=['Fall']).columns
 
 
 
@@ -130,6 +133,40 @@ print(le.classes_)
 print("\nRótulo codificado (LabelEncoder):")
 print(le.transform(['no', 'yes']))  # Esperado: [0 1]
 
+
+
+X_train2, X_val, y_train2, y_val = \
+    train_test_split(X_train, y_train, test_size=0.3,
+                     stratify=y_train,
+                     random_state=0)
+    
+sc = StandardScaler()
+X_train_std = sc.fit_transform(X_train2)
+X_test_std = sc.transform(X_val)
+
+pca = PCA(n_components=None)
+
+X_train_pca = pca.fit_transform(X_train_std)
+
+print(pca.explained_variance_ratio_)
+
+eigen_vals=pca.explained_variance_;
+eigen_vecs=(-1)*pca.components_.T ;
+tot = sum(eigen_vals)
+
+var_exp = [(i / tot) for i in sorted(eigen_vals, reverse=True)]
+cum_var_exp = np.cumsum(var_exp)
+
+plt.bar(range(1, 64), var_exp, align='center',
+        label='Individual explained variance')
+plt.step(range(1, 64), cum_var_exp, where='mid',
+         label='Cumulative explained variance')
+plt.ylabel('Explained variance ratio')
+plt.xlabel('Principal component index')
+plt.legend(loc='best')
+plt.tight_layout()
+plt.savefig('variancia_explicada.png', dpi=300)
+plt.show()
 
 
 def agrupar_sinais_interpolados(dados, n_amostras=500):
